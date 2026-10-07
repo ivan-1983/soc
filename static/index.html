@@ -1,0 +1,166 @@
+
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sysmon AI Analyst</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--text:#17202a;--muted:#65727e;--line:#d9dfe5;--code:#d9dde2;--llm:#ffdcae;--accent:#315b85}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Arial,sans-serif}
+header{background:#202a33;color:#fff;padding:28px 5vw}header h1{margin:0 0 6px;font-size:28px}header p{margin:0;color:#cbd4dc}
+main{max-width:1400px;margin:28px auto;padding:0 22px}.grid{display:grid;grid-template-columns:360px 1fr;gap:20px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:20px;box-shadow:0 5px 18px #17202a0d}
+h2{font-size:17px;margin:0 0 14px}.muted{color:var(--muted);font-size:13px}
+input[type=file]{width:100%;padding:14px;border:2px dashed #b9c2ca;border-radius:12px;background:#fafbfc}
+button{border:0;border-radius:10px;padding:11px 16px;background:var(--accent);color:#fff;font-weight:700;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:14px}.stat{background:#f7f8fa;border:1px solid var(--line);border-radius:10px;padding:12px}.stat b{display:block;font-size:21px}.tabs{display:flex;gap:8px;margin-bottom:12px}.tab{background:#eef1f4;color:#25313b}.tab.active{background:#202a33;color:#fff}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:9px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted)}
+.badge{display:inline-block;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700}.high{background:#ffd0d0}.medium{background:#ffe8b8}.low{background:#dcefdc}
+pre{white-space:pre-wrap;word-break:break-word;background:#202a33;color:#e8edf1;padding:14px;border-radius:10px;font-size:12px}
+.finding{border-left:5px solid #e0a14a;background:#fff8ed;padding:15px;border-radius:10px;margin-top:12px}
+.hidden{display:none}.drop{margin-top:10px}.small{font-size:11px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:1fr 1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sysmon AI Analyst</h1>
+  <p>Python + Sysmon + rule-based detection + LLM-assisted threat hunting</p>
+</header>
+
+<main>
+<div class="grid">
+  <section class="card">
+    <h2>1. Загрузка Sysmon</h2>
+    <p class="muted">Выберите несколько XML/JSON/NDJSON файлов. API-ключ LLM хранится только на сервере.</p>
+    <input id="files" type="file" multiple accept=".xml,.json,.ndjson">
+    <div class="drop row">
+      <button id="upload">Загрузить и проанализировать</button>
+      <span id="status" class="muted"></span>
+    </div>
+    <div class="stats">
+      <div class="stat"><span class="muted">Файлов</span><b id="fileCount">0</b></div>
+      <div class="stat"><span class="muted">Событий</span><b id="eventCount">0</b></div>
+      <div class="stat"><span class="muted">High+</span><b id="highCount">0</b></div>
+    </div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:20px 0">
+    <h2>2. LLM Analysis</h2>
+    <p class="muted">В LLM отправляются только события с наибольшим risk score.</p>
+    <button id="analyze" disabled>Analyze with LLM</button>
+    <div id="llmStatus" class="muted" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <div class="tabs">
+      <button class="tab active" data-tab="events">Events</button>
+      <button class="tab" data-tab="findings">Findings</button>
+      <button class="tab" data-tab="llm">LLM Result</button>
+    </div>
+
+    <div id="events">
+      <p class="muted">Загрузите события для отображения.</p>
+    </div>
+
+    <div id="findings" class="hidden">
+      <p class="muted">Rule-based findings появятся после загрузки.</p>
+    </div>
+
+    <div id="llm" class="hidden">
+      <p class="muted">Запустите LLM Analysis.</p>
+    </div>
+  </section>
+</div>
+</main>
+
+<script>
+let state = {events:[], llm:null};
+
+const $ = id => document.getElementById(id);
+
+function esc(v){
+  return String(v ?? "").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+
+function renderEvents(){
+  const rows = state.events.map(e=>`
+    <tr>
+      <td>${esc(e.event_id)}</td>
+      <td>${esc(e.time)}</td>
+      <td>${esc(e.computer)}</td>
+      <td>${esc(e.image)}</td>
+      <td>${esc(e.parent_image)}</td>
+      <td>${esc(e.command_line)}</td>
+      <td><span class="badge ${e.risk_score>=70?'high':e.risk_score>=35?'medium':'low'}">${e.risk_score}</span></td>
+    </tr>`).join("");
+  $("events").innerHTML = `<table><thead><tr>
+    <th>ID</th><th>Time</th><th>Host</th><th>Process</th><th>Parent</th><th>Command line</th><th>Risk</th>
+  </tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderFindings(){
+  const findings = state.events.filter(e=>e.risk_score>=35).slice(0,30);
+  $("findings").innerHTML = findings.length ? findings.map(e=>`
+    <div class="finding">
+      <b>Risk ${e.risk_score}</b> · Event ${esc(e.event_id)} · ${esc(e.image)}
+      <div class="muted" style="margin-top:6px">${esc((e.risk_reasons||[]).join("; "))}</div>
+    </div>`).join("") : `<p class="muted">Подозрительных rule-based событий не найдено.</p>`;
+}
+
+$("upload").onclick = async ()=>{
+  const files = [...$("files").files];
+  if(!files.length){ $("status").textContent="Выберите файлы."; return; }
+  const fd = new FormData();
+  files.forEach(f=>fd.append("files",f));
+  $("upload").disabled=true; $("status").textContent="Обработка...";
+  try{
+    const r = await fetch("/api/upload",{method:"POST",body:fd});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || "Upload error");
+    state.events=data.events||[];
+    $("fileCount").textContent=data.files.length;
+    $("eventCount").textContent=data.event_count;
+    $("highCount").textContent=state.events.filter(e=>e.risk_score>=70).length;
+    $("analyze").disabled=!state.events.length;
+    renderEvents(); renderFindings();
+    $("status").textContent=`Готово. ${data.event_count} событий.`;
+  }catch(e){$("status").textContent=e.message}
+  finally{$("upload").disabled=false}
+};
+
+$("analyze").onclick = async ()=>{
+  $("analyze").disabled=true; $("llmStatus").textContent="LLM анализирует контекст...";
+  try{
+    const r=await fetch("/api/analyze",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({events:state.events,max_context_events:80})});
+    const data=await r.json();
+    if(!r.ok) throw new Error(data.detail||"LLM error");
+    state.llm=data.analysis;
+    const a=data.analysis;
+    $("llm").innerHTML=`
+      <div class="finding">
+        <b>${esc(a.verdict)}</b> ·
+        <span class="badge ${a.severity==='high'||a.severity==='critical'?'high':a.severity==='medium'?'medium':'low'}">${esc(a.severity)}</span>
+        · confidence ${Math.round((a.confidence||0)*100)}%
+        <p>${esc(a.summary)}</p>
+      </div>
+      <h3>Evidence</h3><ul>${(a.evidence||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+      <h3>MITRE ATT&CK</h3><ul>${(a.attack_techniques||[]).map(x=>`<li>${esc(x.id)} — ${esc(x.name)}</li>`).join("")}</ul>
+      <h3>Recommended hunting</h3><ul>${(a.recommended_hunting_queries||[]).map(x=>`<li>${esc(x)}</li>`).join("")}</ul>
+      <details><summary>Raw structured result</summary><pre>${esc(JSON.stringify(a,null,2))}</pre></details>`;
+    $("llmStatus").textContent=`Готово. Model: ${data.model}`;
+    document.querySelector('[data-tab="llm"]').click();
+  }catch(e){$("llmStatus").textContent=e.message}
+  finally{$("analyze").disabled=false}
+};
+
+document.querySelectorAll(".tab").forEach(btn=>{
+  btn.onclick=()=>{
+    document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));
+    btn.classList.add("active");
+    ["events","findings","llm"].forEach(id=>$(id).classList.toggle("hidden",id!==btn.dataset.tab));
+  };
+});
+</script>
+</body>
+</html>
